@@ -163,7 +163,7 @@ func (cnc *CloudNodeController) updateNodeAddress(node *v1.Node, instances cloud
 
 	nodeAddresses, err := getNodeAddressesByProviderIDOrName(instances, node)
 	if err != nil {
-		glog.Errorf("%v", err)
+		glog.Errorf("failed to get node addresses because %v", err)
 		return
 	}
 	// Check if a hostname address exists in the cloud provided addresses
@@ -324,7 +324,7 @@ func (cnc *CloudNodeController) AddCloudNode(obj interface{}) {
 
 		nodeAddresses, err := getNodeAddressesByProviderIDOrName(instances, curNode)
 		if err != nil {
-			glog.Errorf("%v", err)
+			glog.Errorf("failed to get node addresses because %v", err)
 			return nil
 		}
 

@@ -47,6 +47,7 @@ pkg_tar(
     name = "gce-master-manifests",
     srcs = [
         "manifests/abac-authz-policy.jsonl",
+        "manifests/cloud-controller-manager.manifest",
         "manifests/cluster-autoscaler.manifest",
         "manifests/e2e-image-puller.manifest",
         "manifests/etcd.manifest",

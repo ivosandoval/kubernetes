@@ -493,6 +493,7 @@ func (gce *GCECloud) getInstanceFromProjectInZoneByName(project, zone, name stri
 	res, err := gce.c.Instances().Get(context.Background(), meta.ZonalKey(name, zone))
 	mc.Observe(err)
 	if err != nil {
+		glog.Errorf("getInstanceFromProjectInZoneByName: failed to get instance %s, zone %s, project %s; err: %v", name, zone, project, err)
 		return nil, err
 	}
 	return &gceInstance{

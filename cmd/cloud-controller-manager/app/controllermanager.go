@@ -41,6 +41,8 @@ import (
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/controller"
 	cloudcontrollers "k8s.io/kubernetes/pkg/controller/cloud"
+	ipamcontoller "k8s.io/kubernetes/pkg/controller/nodeipam"
+	"k8s.io/kubernetes/pkg/controller/nodeipam/ipam"
 	routecontroller "k8s.io/kubernetes/pkg/controller/route"
 	servicecontroller "k8s.io/kubernetes/pkg/controller/service"
 	"k8s.io/kubernetes/pkg/util/configz"
@@ -134,6 +136,11 @@ func Run(c *cloudcontrollerconfig.CompletedConfig) error {
 		}
 		var clientBuilder controller.ControllerClientBuilder
 		if c.Generic.ComponentConfig.UseServiceAccountCredentials {
+			if len(c.Generic.ComponentConfig.ServiceAccountKeyFile) == 0 {
+				// It's possible another controller process is creating the tokens for us.
+				// If one isn't, we'll timeout and exit when our client builder is unable to create the tokens.
+				glog.Warningf("--use-service-account-credentials was specified without providing a --service-account-private-key-file")
+			}
 			clientBuilder = controller.SAControllerClientBuilder{
 				ClientConfig:         restclient.AnonymousClientConfig(c.Generic.Kubeconfig),
 				CoreClient:           c.Generic.Client.CoreV1(),
@@ -200,16 +207,50 @@ func startControllers(c *cloudcontrollerconfig.CompletedConfig, kubeconfig *rest
 	if cloud != nil {
 		// Initialize the cloud provider with a reference to the clientBuilder
 		cloud.Initialize(clientBuilder)
+	} else {
+		glog.Warningf("Was unable to initialize the cloud %s. Will not configure cloud provider routes.", c.Generic.ComponentConfig.CloudProvider)
 	}
 
 	// TODO: move this setup into Config
 	versionedClient := rootClientBuilder.ClientOrDie("shared-informers")
 	sharedInformers := informers.NewSharedInformerFactory(versionedClient, resyncPeriod(c)())
+	kubeClient := client("cloud-node-controller")
+
+	// Start the NodeIPAMController
+	var clusterCIDR *net.IPNet
+	var err error
+	if len(strings.TrimSpace(c.Generic.ComponentConfig.ClusterCIDR)) != 0 {
+		_, clusterCIDR, err = net.ParseCIDR(c.Generic.ComponentConfig.ClusterCIDR)
+		if err != nil {
+			glog.Warningf("Unsuccessful parsing of cluster CIDR %v: %v", c.Generic.ComponentConfig.ClusterCIDR, err)
+		}
+	}
+	var serviceCIDR *net.IPNet
+	if len(strings.TrimSpace(c.Generic.ComponentConfig.ServiceCIDR)) != 0 {
+		_, serviceCIDR, err = net.ParseCIDR(c.Generic.ComponentConfig.ServiceCIDR)
+		if err != nil {
+			glog.Warningf("Unsuccessful parsing of service CIDR %v: %v", c.Generic.ComponentConfig.ServiceCIDR, err)
+		}
+	}
+
+	nodeIPAMController, err := ipamcontoller.NewNodeIpamController(
+		sharedInformers.Core().V1().Nodes(),
+		cloud,
+		kubeClient,
+		clusterCIDR,
+		serviceCIDR,
+		int(c.Generic.ComponentConfig.NodeCIDRMaskSize),
+		c.Generic.ComponentConfig.AllocateNodeCIDRs,
+		ipam.CIDRAllocatorType(c.Generic.ComponentConfig.CIDRAllocatorType))
+	if err != nil {
+		glog.Fatalf("Failed to start the node controller: %v", err)
+	}
+	go nodeIPAMController.Run(stop)
 
 	// Start the CloudNodeController
 	nodeController := cloudcontrollers.NewCloudNodeController(
 		sharedInformers.Core().V1().Nodes(),
-		client("cloud-node-controller"), cloud,
+		kubeClient, cloud,
 		c.Generic.ComponentConfig.NodeMonitorPeriod.Duration,
 		c.Extra.NodeStatusUpdateFrequency)
 
@@ -253,6 +294,7 @@ func startControllers(c *cloudcontrollerconfig.CompletedConfig, kubeconfig *rest
 			routeController := routecontroller.New(routes, client("route-controller"), sharedInformers.Core().V1().Nodes(), c.Generic.ComponentConfig.ClusterName, clusterCIDR)
 			go routeController.Run(stop, c.Generic.ComponentConfig.RouteReconciliationPeriod.Duration)
 			time.Sleep(wait.Jitter(c.Generic.ComponentConfig.ControllerStartInterval.Duration, ControllerStartJitter))
+			// routeController := routecontroller.New(routes, clientBuilder.ClientOrDie("route-controller"), sharedInformers.Core().V1().Nodes(), s.ClusterName, clusterCIDR)
 		}
 	} else {
 		glog.Infof("Will not configure cloud provider routes for allocate-node-cidrs: %v, configure-cloud-routes: %v.", c.Generic.ComponentConfig.AllocateNodeCIDRs, c.Generic.ComponentConfig.ConfigureCloudRoutes)

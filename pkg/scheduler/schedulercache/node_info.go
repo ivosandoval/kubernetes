@@ -49,7 +49,7 @@ type NodeInfo struct {
 	// as int64, to avoid conversions and accessing map.
 	allocatableResource *Resource
 
-	// Cached tains of the node for faster lookup.
+	// Cached taints of the node for faster lookup.
 	taints    []v1.Taint
 	taintsErr error
 
